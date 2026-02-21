@@ -24,15 +24,18 @@ router.get('/dashboard/:userId', (req, res) => {
         const reputation = getReputationByUser(userId);
         const escrows = getEscrowsByUser(userId);
 
-        const approved = txns.filter(t => t.status === 'approved');
-        const rejected = txns.filter(t => t.status === 'rejected');
-        const totalSpent = approved.reduce((sum, t) => sum + t.amount, 0);
-        const totalBlocked = rejected.reduce((sum, t) => sum + t.amount, 0);
+        const isSuccess = (status) => ['approved', 'completed'].includes(status?.toLowerCase());
+
+        const approved = txns.filter(t => isSuccess(t.status));
+        const rejected = txns.filter(t => t.status?.toLowerCase() === 'rejected' || t.status?.toLowerCase() === 'failed');
+        const totalSpent = approved.reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
+        const totalBlocked = rejected.reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
 
         // Spending by category
         const categorySpend = {};
         approved.forEach(t => {
-            categorySpend[t.merchantCategory] = (categorySpend[t.merchantCategory] || 0) + t.amount;
+            const amt = parseFloat(t.amount) || 0;
+            categorySpend[t.merchantCategory] = (categorySpend[t.merchantCategory] || 0) + amt;
         });
 
         // Spending over time (last 7 days)
@@ -95,8 +98,8 @@ router.get('/reputation/:userId', (req, res) => {
 router.get('/system', (req, res) => {
     const allTxns = getAllTransactions();
     const allIntents = intentStore;
-    const approved = allTxns.filter(t => t.status === 'approved');
-    const rejected = allTxns.filter(t => t.status === 'rejected');
+    const approved = allTxns.filter(t => ['approved', 'completed'].includes(t.status?.toLowerCase()));
+    const rejected = allTxns.filter(t => ['rejected', 'failed'].includes(t.status?.toLowerCase()));
 
     return res.json({
         success: true,

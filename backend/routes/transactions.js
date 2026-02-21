@@ -1,94 +1,92 @@
 /**
  * Transaction Routes
- * POST /api/transactions/validate  - Validate & simulate a UPI transaction
- * GET  /api/transactions/user/:id  - Get transaction history for user
- * GET  /api/transactions/all       - All transactions (analytics)
  */
 
 const express = require('express');
 const router = express.Router();
-const { v4: uuidv4 } = require('uuid');
 const { validateTransaction } = require('../services/ruleEngine');
-const { getActiveIntentsByUser, getIntentById, updateIntentUsage, recordViolation } = require('../data/intents');
+const { getIntentsByUser, getIntentById, updateIntentUsage, recordViolation } = require('../data/intents');
 const { merchants } = require('../data/merchants');
-const { getUserById } = require('../data/users');
-const { addTransaction, getTransactionsByUser, getAllTransactions } = require('../data/transactions');
+const { getUserById, updateUserBalance } = require('../data/users');
+const { addTransaction, getTransactionsByUser, transactions } = require('../data/transactions');
 const { recordReputationEvent } = require('../services/reputationEngine');
 
 /**
+ * Validate and Process a UPI Transaction
  * POST /api/transactions/validate
- * Main transaction validation endpoint
- * Simulates the UPI pre-settlement interception layer
  */
 router.post('/validate', (req, res) => {
     try {
-        const { userId, intentId, merchantId, amount, proofProvided = false } = req.body;
+        const { userId, intentId, merchantId, amount, proofProvided = false, emergencyReason = null } = req.body;
+        const emergencyOverride = !!emergencyReason;
 
-        // Fetch user
         const user = getUserById(userId);
         if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
-        // Fetch merchant
         const merchant = merchants.find(m => m.id === merchantId);
         if (!merchant) return res.status(404).json({ success: false, error: 'Merchant not found' });
 
-        // Find matching intent
-        let intent;
-        if (intentId) {
-            intent = getIntentById(intentId);
-        } else {
-            // Auto-select best matching active intent
-            const activeIntents = getActiveIntentsByUser(userId);
-            intent = activeIntents.find(i => i.amountRemaining >= amount);
+        // Auto-select intent if not provided
+        let intent = intentId ? getIntentById(intentId) : null;
+        if (!intent && !emergencyOverride) {
+            intent = getIntentsByUser(userId).find(i => i.status === 'active' && i.amountRemaining >= amount);
         }
 
-        if (!intent) {
-            return res.status(404).json({
-                success: false,
-                error: 'No active intent found for this transaction. Please create an intent first.'
-            });
+        // Pre-validation: Check if user has enough funds
+        if (emergencyOverride) {
+            if (user.walletBalance < amount) {
+                return res.status(400).json({ success: false, error: 'Insufficient total balance for emergency payment' });
+            }
+        } else {
+            // For regular transactions, we check against available balance
+            if (user.availableBalance < amount && (!intent || intent.amountRemaining < amount)) {
+                return res.status(400).json({ success: false, error: 'Insufficient available balance' });
+            }
         }
 
         // Run the rule engine
-        const validationResult = validateTransaction(intent, merchant, amount, { proofProvided });
+        const validationResult = validateTransaction(intent, merchant, amount, { proofProvided, emergencyOverride });
 
-        const txnId = `TXN${String(Date.now()).slice(-8)}`;
+        const txnId = `TXN-${Date.now()}`;
 
         // Build transaction record
         const txnRecord = {
             id: txnId,
             userId,
-            intentId: intent.id,
+            userName: user.name,
+            intentId: intent ? intent.id : null,
             merchantId: merchant.id,
             merchantName: merchant.name,
-            merchantMCC: merchant.mcc,
             merchantCategory: merchant.category,
-            amount,
+            merchantMCC: merchant.mcc,
+            amount: parseFloat(amount),
             status: validationResult.approved ? 'approved' : 'rejected',
             timestamp: new Date().toISOString(),
-            validationDetails: {
-                checks: validationResult.checks,
-                processingTimeMs: validationResult.processingTimeMs
-            },
-            upiSettlementRef: validationResult.upiSettlementRef,
-            violationReason: validationResult.violationReason,
+            upiRef: validationResult.upiSettlementRef,
+            checks: validationResult.checks,
+            isEmergency: emergencyOverride,
+            emergencyReason,
+            validationDetails: validationResult,
             riskAssessment: validationResult.riskAssessment
         };
 
         addTransaction(txnRecord);
 
         if (validationResult.approved) {
-            // Update intent usage
-            updateIntentUsage(intent.id, amount);
-            // Update reputation
-            recordReputationEvent(userId, 'intent_compliance',
-                `Compliant transaction of ₹${amount} at ${merchant.name}`);
+            const parsedAmount = parseFloat(amount);
+            if (emergencyOverride) {
+                updateUserBalance(userId, user.walletBalance - parsedAmount, user.lockedBalance);
+                recordReputationEvent(userId, 'emergency_override', `Emergency payment of ₹${parsedAmount} at ${merchant.name}. Reason: ${emergencyReason}`);
+            } else if (intent) {
+                updateIntentUsage(intent.id, parsedAmount);
+                updateUserBalance(userId, user.walletBalance - parsedAmount, user.lockedBalance - parsedAmount);
+                recordReputationEvent(userId, 'intent_compliance', `Compliant transaction of ₹${parsedAmount} at ${merchant.name}`);
+            }
         } else {
-            // Record violation
-            recordViolation(intent.id);
-            // Penalize reputation
-            recordReputationEvent(userId, 'intent_violation_attempt',
-                `Blocked transaction at ${merchant.name}: ${validationResult.violationReason?.substring(0, 80)}`);
+            if (intent) {
+                recordViolation(intent.id);
+            }
+            recordReputationEvent(userId, 'intent_violation_attempt', `Blocked transaction at ${merchant.name}: ${validationResult.violationReason?.substring(0, 80)}`);
         }
 
         return res.json({
@@ -96,12 +94,7 @@ router.post('/validate', (req, res) => {
             transactionId: txnId,
             approved: validationResult.approved,
             validationResult,
-            transaction: txnRecord,
-            intent: {
-                id: intent.id,
-                amountRemaining: intent.amountRemaining - (validationResult.approved ? amount : 0),
-                amountUsed: intent.amountUsed + (validationResult.approved ? amount : 0)
-            }
+            transaction: txnRecord
         });
 
     } catch (err) {
@@ -110,27 +103,22 @@ router.post('/validate', (req, res) => {
     }
 });
 
-// Get transaction history for user
+// Get recent transactions for a user
 router.get('/user/:userId', (req, res) => {
     try {
-        const txns = getTransactionsByUser(req.params.userId);
-        return res.json({ success: true, transactions: txns.reverse(), count: txns.length });
+        const history = getTransactionsByUser(req.params.userId);
+        return res.json({ success: true, transactions: history });
     } catch (err) {
         return res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// Get all transactions (analytics)
+// Get all transactions (admin view)
 router.get('/all', (req, res) => {
-    try {
-        const txns = getAllTransactions();
-        return res.json({ success: true, transactions: txns.reverse(), count: txns.length });
-    } catch (err) {
-        return res.status(500).json({ success: false, error: err.message });
-    }
+    return res.json({ success: true, transactions: transactions });
 });
 
-// Get merchants list (for simulation dropdown)
+// Get all merchants
 router.get('/merchants', (req, res) => {
     return res.json({ success: true, merchants });
 });

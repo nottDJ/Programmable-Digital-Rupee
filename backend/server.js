@@ -17,8 +17,10 @@ const intentRoutes = require('./routes/intents');
 const transactionRoutes = require('./routes/transactions');
 const escrowRoutes = require('./routes/escrow');
 const analyticsRoutes = require('./routes/analytics');
+const authRoutes = require('./routes/auth');
 
 const { getUserById } = require('./data/users');
+
 const { merchants } = require('./data/merchants');
 
 const app = express();
@@ -39,7 +41,7 @@ app.use('/api/', limiter);
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:3000', 'http://localhost:5174'],
+    origin: ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000', 'http://localhost:5174'],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -56,6 +58,8 @@ app.use('/api/intents', intentRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/escrow', escrowRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/auth', authRoutes);
+
 
 // ── Core User Route ───────────────────────────────────────────────────────────
 app.get('/api/users/:id', (req, res) => {

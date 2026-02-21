@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import Header from '../components/Header';
 import { getDashboardAnalytics } from '../api/client';
+import { useUser } from '../context/UserContext';
 import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
     Tooltip, ResponsiveContainer, Cell, Legend
@@ -36,12 +37,15 @@ export default function Analytics() {
     const [loading, setLoading] = useState(true);
     const [tab, setTab] = useState('overview');
 
+    const { user } = useUser();
+
     useEffect(() => {
-        getDashboardAnalytics()
+        if (!user) return;
+        getDashboardAnalytics(user.id)
             .then(r => setData(r.data))
             .catch(console.error)
             .finally(() => setLoading(false));
-    }, []);
+    }, [user]);
 
     if (loading) return (
         <div>
@@ -254,7 +258,7 @@ export default function Analytics() {
                                                 <td style={{ fontFamily: 'monospace', fontSize: '0.75rem' }}>{t.merchantMCC}</td>
                                                 <td style={{ fontWeight: 700, color: 'var(--text-primary)' }}>₹{t.amount.toLocaleString('en-IN')}</td>
                                                 <td>
-                                                    <span className={`badge badge-${t.status === 'approved' ? 'approved' : 'rejected'}`}>
+                                                    <span className={`badge badge-${['approved', 'completed'].includes(t.status?.toLowerCase()) ? 'approved' : 'rejected'}`}>
                                                         {t.status}
                                                     </span>
                                                 </td>

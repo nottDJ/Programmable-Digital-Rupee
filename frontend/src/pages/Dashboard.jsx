@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import Header from '../components/Header';
 import { getDashboardAnalytics } from '../api/client';
+import { useUser } from '../context/UserContext';
 import {
     AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts';
@@ -39,12 +40,15 @@ export default function Dashboard() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
 
+    const { user } = useUser();
+
     useEffect(() => {
-        getDashboardAnalytics()
+        if (!user) return;
+        getDashboardAnalytics(user.id)
             .then(r => setData(r.data))
             .catch(console.error)
             .finally(() => setLoading(false));
-    }, []);
+    }, [user]);
 
     if (loading) {
         return (
@@ -245,7 +249,7 @@ export default function Dashboard() {
                                         </td>
                                         <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>₹{txn.amount.toLocaleString('en-IN')}</td>
                                         <td>
-                                            {txn.status === 'approved' ? (
+                                            {['approved', 'completed'].includes(txn.status?.toLowerCase()) ? (
                                                 <span className="badge badge-approved"><CheckCircle size={10} /> Approved</span>
                                             ) : (
                                                 <span className="badge badge-rejected"><XCircle size={10} /> Rejected</span>

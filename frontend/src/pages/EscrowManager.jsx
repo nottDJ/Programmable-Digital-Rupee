@@ -1,8 +1,12 @@
 // src/pages/EscrowManager.jsx
 import { useState, useEffect } from 'react';
 import Header from '../components/Header';
-import { getUserEscrows, releaseMilestone, initiateClawback } from '../api/client';
-import { Lock, Unlock, RefreshCw, CheckCircle, Clock, AlertCircle, ArrowDownLeft } from 'lucide-react';
+import { getUserEscrows, releaseMilestone, initiateClawback, modifyEscrow } from '../api/client';
+import { useUser } from '../context/UserContext';
+import {
+    Lock, Unlock, RefreshCw, CheckCircle, Clock, AlertCircle,
+    ArrowDownLeft, Edit2, X, Plus, Trash2, Save
+} from 'lucide-react';
 
 const StatusBadge = ({ status }) => {
     const map = {
@@ -72,16 +76,23 @@ const MilestoneRow = ({ m, escrowId, onRefresh }) => {
 };
 
 export default function EscrowManager() {
+    const { user } = useUser();
     const [escrows, setEscrows] = useState([]);
     const [loading, setLoading] = useState(true);
     const [clawbackMsg, setClawbackMsg] = useState({});
 
+    // Edit Modal State
+    const [editingEscrow, setEditingEscrow] = useState(null);
+    const [editForm, setEditForm] = useState({ title: '', milestones: [] });
+    const [saving, setSaving] = useState(false);
+
     const load = () => {
+        if (!user) return;
         setLoading(true);
-        getUserEscrows().then(r => setEscrows(r.data.escrows)).catch(console.error).finally(() => setLoading(false));
+        getUserEscrows(user.id).then(r => setEscrows(r.data.escrows)).catch(console.error).finally(() => setLoading(false));
     };
 
-    useEffect(() => { load(); }, []);
+    useEffect(() => { load(); }, [user]);
 
     const handleClawback = async (escrowId, partial) => {
         try {
@@ -91,6 +102,49 @@ export default function EscrowManager() {
         } catch (e) {
             setClawbackMsg(prev => ({ ...prev, [escrowId]: { error: e.response?.data?.error } }));
         }
+    };
+
+    const openEditModal = (escrow) => {
+        setEditingEscrow(escrow);
+        setEditForm({
+            title: escrow.title,
+            milestones: [...escrow.milestones.map(m => ({ ...m }))]
+        });
+    };
+
+    const handleSaveEdit = async () => {
+        setSaving(true);
+        try {
+            await modifyEscrow(editingEscrow.id, editForm);
+            setEditingEscrow(null);
+            load();
+        } catch (e) {
+            console.error(e);
+            alert('Failed to save changes');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const updateMilestone = (index, field, value) => {
+        const updated = [...editForm.milestones];
+        updated[index] = { ...updated[index], [field]: field === 'amount' ? parseFloat(value) : value };
+        setEditForm({ ...editForm, milestones: updated });
+    };
+
+    const addMilestone = () => {
+        setEditForm({
+            ...editForm,
+            milestones: [...editForm.milestones, { description: 'New Milestone', amount: 500, proofRequired: 'receipt', status: 'pending' }]
+        });
+    };
+
+    const removeMilestone = (index) => {
+        if (editForm.milestones[index].status === 'completed') return;
+        setEditForm({
+            ...editForm,
+            milestones: editForm.milestones.filter((_, i) => i !== index)
+        });
     };
 
     if (loading) return (
@@ -105,7 +159,6 @@ export default function EscrowManager() {
             <Header title="Escrow Manager" subtitle="Milestone-based programmable payments with proof verification" />
             <div className="page-container">
 
-                {/* Summary strip */}
                 <div className="stat-grid" style={{ marginBottom: 24 }}>
                     {[
                         { label: 'Total Escrows', value: escrows.length, icon: <Lock size={18} />, cls: 'blue' },
@@ -137,7 +190,6 @@ export default function EscrowManager() {
 
                             return (
                                 <div key={escrow.id} className="card card-p">
-                                    {/* Escrow Header */}
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
                                         <div>
                                             <h3 style={{ fontSize: '1rem', marginBottom: 4 }}>{escrow.title}</h3>
@@ -146,12 +198,16 @@ export default function EscrowManager() {
                                                 <span style={{ fontSize: '0.7rem', fontFamily: 'monospace', color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '2px 8px', borderRadius: 6 }}>{escrow.id}</span>
                                             </div>
                                         </div>
-                                        <button className="btn btn-ghost btn-sm" onClick={load} title="Refresh">
-                                            <RefreshCw size={13} />
-                                        </button>
+                                        <div style={{ display: 'flex', gap: 8 }}>
+                                            <button className="btn btn-ghost btn-sm" onClick={() => openEditModal(escrow)} title="Edit Escrow">
+                                                <Edit2 size={13} /> Edit
+                                            </button>
+                                            <button className="btn btn-ghost btn-sm" onClick={load} title="Refresh">
+                                                <RefreshCw size={13} />
+                                            </button>
+                                        </div>
                                     </div>
 
-                                    {/* Amount Overview */}
                                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 16 }}>
                                         {[
                                             { label: 'Total', value: escrow.totalAmount, color: 'var(--text-primary)' },
@@ -165,7 +221,6 @@ export default function EscrowManager() {
                                         ))}
                                     </div>
 
-                                    {/* Progress */}
                                     <div style={{ marginBottom: 16 }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 6 }}>
                                             <span>Release Progress</span>
@@ -176,7 +231,6 @@ export default function EscrowManager() {
                                         </div>
                                     </div>
 
-                                    {/* Milestones */}
                                     <div style={{ marginBottom: 16 }}>
                                         <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>Milestones</div>
                                         {escrow.milestones.map(m => (
@@ -184,7 +238,6 @@ export default function EscrowManager() {
                                         ))}
                                     </div>
 
-                                    {/* Clawback section */}
                                     {escrow.status !== 'released' && escrow.status !== 'clawback' && (
                                         <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 14 }}>
                                             <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 10, fontWeight: 600 }}>Recovery Actions</div>
@@ -214,6 +267,58 @@ export default function EscrowManager() {
                     </div>
                 )}
             </div>
+
+            {/* Edit Modal Overlay */}
+            {editingEscrow && (
+                <div className="modal-overlay" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
+                    <div className="card card-p animate-slide-in" style={{ width: '100%', maxWidth: 600, maxHeight: '90vh', overflowY: 'auto' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                            <h3 style={{ fontSize: '1.2rem' }}>Modify Escrow</h3>
+                            <button className="btn btn-ghost" onClick={() => setEditingEscrow(null)}><X size={20} /></button>
+                        </div>
+
+                        <div className="form-group">
+                            <label className="form-label">Escrow Title</label>
+                            <input className="input" value={editForm.title} onChange={e => setEditForm({ ...editForm, title: e.target.value })} />
+                        </div>
+
+                        <div style={{ marginTop: 20 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                <label className="form-label">Milestones</label>
+                                <button className="btn btn-ghost btn-sm" onClick={addMilestone}><Plus size={14} /> Add</button>
+                            </div>
+
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                {editForm.milestones.map((m, i) => (
+                                    <div key={i} className="card" style={{ padding: 12, background: 'var(--bg-secondary)' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                                            <input className="input-sm" style={{ flex: 1, marginRight: 8 }} value={m.description} onChange={e => updateMilestone(i, 'description', e.target.value)} disabled={m.status === 'completed'} />
+                                            <button className="btn btn-ghost btn-sm" style={{ color: 'var(--accent-red)' }} onClick={() => removeMilestone(i)} disabled={m.status === 'completed'}><Trash2 size={14} /></button>
+                                        </div>
+                                        <div className="grid-2">
+                                            <div className="form-group-sm">
+                                                <label style={{ fontSize: '0.65rem' }}>Amount (₹)</label>
+                                                <input type="number" className="input-sm" value={m.amount} onChange={e => updateMilestone(i, 'amount', e.target.value)} disabled={m.status === 'completed'} />
+                                            </div>
+                                            <div className="form-group-sm">
+                                                <label style={{ fontSize: '0.65rem' }}>Proof Key</label>
+                                                <input className="input-sm" value={m.proofRequired} onChange={e => updateMilestone(i, 'proofRequired', e.target.value)} disabled={m.status === 'completed'} />
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div style={{ marginTop: 24, display: 'flex', gap: 12 }}>
+                            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setEditingEscrow(null)}>Cancel</button>
+                            <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSaveEdit} disabled={saving}>
+                                {saving ? <div className="spinner" /> : <><Save size={16} /> Save Changes</>}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

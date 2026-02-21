@@ -17,7 +17,8 @@
  * If ANY check fails → reject transaction, log violation
  */
 
-const { cityGeoBounds } = require('../data/merchants');
+const { mccCategoryMap, cityGeoBounds } = require('../data/merchants');
+const { getIntentsByUser, getIntentById, updateIntentUsage, recordViolation } = require('../data/intents');
 
 /**
  * Check 1: Intent Status Validation
@@ -159,10 +160,12 @@ const validateMerchantCategory = (intent, merchant) => {
     // Check MCC match
     const mccMatch = allowedMCCs.includes(merchant.mcc);
 
-    // Check category string match
+    // Dynamic category match using mccCategoryMap
+    const merchantCategories = mccCategoryMap[merchant.mcc] || [merchant.category];
     const categoryMatch = allowedCategories.some(allowed =>
-        merchant.category === allowed ||
-        merchant.productTags?.some(tag => allowed.includes(tag) || tag.includes(allowed))
+        merchantCategories.includes(allowed.toLowerCase()) ||
+        merchant.category === allowed.toLowerCase() ||
+        merchant.productTags?.some(tag => allowed.toLowerCase().includes(tag) || tag.includes(allowed.toLowerCase()))
     );
 
     if (!mccMatch && !categoryMatch) {
@@ -255,6 +258,30 @@ const assessRiskScore = (merchant, amount) => {
 const validateTransaction = (intent, merchant, transactionAmount, transactionData = {}) => {
     const startTime = Date.now();
     const checks = [];
+    const { proofProvided = false, emergencyOverride = false } = transactionData;
+
+    // Handle missing intent for non-emergency transctions
+    if (!intent && !emergencyOverride) {
+        return buildResult(false, [{
+            passed: false,
+            check: 'intentStatus',
+            reason: 'No applicable spending rule (intent) found for this transaction. Please create an intent or select an active one.'
+        }], null, merchant, startTime);
+    }
+
+    // Handle Emergency Override
+    if (emergencyOverride) {
+        return {
+            approved: true,
+            upiSettlementRef: `UPI-EMER-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+            merchant,
+            amount: transactionAmount,
+            processingTimeMs: Date.now() - startTime,
+            checks: [{ name: 'Emergency Override', passed: true, message: 'Bypassed rules due to emergency' }],
+            riskAssessment: { score: 10, level: 'low', flagged: true, reason: 'Emergency Override Used' },
+            isEmergency: true
+        };
+    }
 
     // Run all validation checks in sequence
     const statusCheck = validateIntentStatus(intent);

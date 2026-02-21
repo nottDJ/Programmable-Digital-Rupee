@@ -1,17 +1,20 @@
 // src/components/Sidebar.jsx
 import { NavLink } from 'react-router-dom';
+import { useUser } from '../context/UserContext';
 import {
     LayoutDashboard, Zap, CreditCard, Shield, BarChart3,
-    Lock, Coins, BookOpen, Settings, ChevronRight
+    Lock, Coins, BookOpen, Settings, ChevronRight, LogOut
 } from 'lucide-react';
 
 const NAV_ITEMS = [
     { label: 'Overview', path: '/', icon: LayoutDashboard },
+    { label: 'Contacts', path: '/contacts', icon: Coins },
     { label: 'Intent Builder', path: '/intent', icon: Zap },
     { label: 'Simulate UPI', path: '/simulate', icon: CreditCard },
     { label: 'Escrow Manager', path: '/escrow', icon: Lock },
     { label: 'Analytics', path: '/analytics', icon: BarChart3 },
 ];
+
 
 const MORE_ITEMS = [
     { label: 'Reputation Score', path: '/reputation', icon: Shield },
@@ -19,6 +22,10 @@ const MORE_ITEMS = [
 ];
 
 export default function Sidebar() {
+    const { user, logout } = useUser();
+
+    if (!user) return null;
+
     return (
         <aside className="sidebar">
             {/* Logo */}
@@ -75,15 +82,18 @@ export default function Sidebar() {
 
             {/* User Footer */}
             <div className="sidebar-footer">
-                <div className="user-chip">
-                    <div className="user-avatar">PS</div>
+                <div className="user-chip" style={{ position: 'relative' }}>
+                    <div className="user-avatar">{user.name.split(' ').map(n => n[0]).join('')}</div>
                     <div className="user-info">
-                        <div className="user-name">Priya Sharma</div>
-                        <div className="user-id">USR001 • Chennai</div>
+                        <div className="user-name">{user.name}</div>
+                        <div className="user-id">{user.id} • {user.city}</div>
                     </div>
-                    <ChevronRight size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                    <button onClick={logout} className="btn btn-ghost" style={{ padding: 4, color: 'var(--accent-red)' }} title="Logout">
+                        <LogOut size={14} />
+                    </button>
                 </div>
             </div>
         </aside>
     );
 }
+

@@ -5,6 +5,7 @@
  * GET  /api/intents/:userId - Get all intents for a user
  * GET  /api/intents/detail/:id - Get intent detail
  * DELETE /api/intents/:id   - Cancel an intent
+ * POST /api/intents/bulk-create - Bulk create rule for multiple users
  */
 
 const express = require('express');
@@ -65,6 +66,40 @@ router.post('/create', (req, res) => {
             success: true,
             intent: newIntent,
             message: `Intent created & ₹${parsedPolicy.amount} locked successfully`
+        });
+    } catch (err) {
+        return res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Bulk Create Intents for multiple users
+router.post('/bulk-create', (req, res) => {
+    try {
+        const { userIds, rawText, parsedPolicy } = req.body;
+
+        if (!userIds || !userIds.length || !rawText || !parsedPolicy) {
+            return res.status(400).json({ success: false, error: 'userIds, rawText, and parsedPolicy are required' });
+        }
+
+        const createdIntents = [];
+
+        userIds.forEach(userId => {
+            const user = getUserById(userId);
+            if (user) {
+                const newIntent = createIntent(userId, rawText, parsedPolicy);
+                updateUserBalance(
+                    userId,
+                    user.walletBalance,
+                    user.lockedBalance + parsedPolicy.amount
+                );
+                createdIntents.push(newIntent);
+            }
+        });
+
+        return res.status(201).json({
+            success: true,
+            count: createdIntents.length,
+            message: `Applied rule to ${createdIntents.length} wallets successfully`
         });
     } catch (err) {
         return res.status(500).json({ success: false, error: err.message });

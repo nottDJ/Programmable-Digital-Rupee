@@ -1,9 +1,12 @@
 // src/pages/IntentBuilder.jsx
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Header from '../components/Header';
-import { parseIntent, createIntent, getUserIntents } from '../api/client';
-import { Zap, CheckCircle, XCircle, Plus, Trash2, Clock, MapPin, Tag, DollarSign, AlertCircle, ChevronRight, Lightbulb } from 'lucide-react';
-import { useEffect } from 'react';
+import { parseIntent, createIntent, getUserIntents, bulkCreateIntents } from '../api/client';
+import { useUser } from '../context/UserContext';
+import {
+    Zap, CheckCircle, XCircle, Plus, Trash2, Clock, MapPin, Tag,
+    DollarSign, AlertCircle, ChevronRight, Lightbulb, Users, Settings2, FileText
+} from 'lucide-react';
 
 const SAMPLE_INTENTS = [
     "Allow ₹500 for books only for 30 days in Chennai",
@@ -23,7 +26,16 @@ const MCC_LABELS = {
     "5732": "Electronics",
 };
 
+const EMPLOYEES = [
+    { id: "USR001", name: "Priya Sharma (Admin)" },
+    { id: "USR002", name: "Rahul Verma" },
+    { id: "USR003", name: "Ananya Iyer" },
+    { id: "USR004", name: "Vikram Malhotra" },
+];
+
 export default function IntentBuilder() {
+    const { user } = useUser();
+    const [mode, setMode] = useState('nlp'); // 'nlp' or 'manual'
     const [text, setText] = useState('');
     const [parseResult, setParseResult] = useState(null);
     const [parsing, setParsing] = useState(false);
@@ -32,13 +44,25 @@ export default function IntentBuilder() {
     const [intents, setIntents] = useState([]);
     const [loadingIntents, setLoadingIntents] = useState(true);
 
+    // Manual Rule State
+    const [manualAmount, setManualAmount] = useState('500');
+    const [manualCategory, setManualCategory] = useState('5942');
+    const [manualDays, setManualDays] = useState('30');
+    const [manualCity, setManualCity] = useState(user?.city || 'Chennai');
+    const [manualProof, setManualProof] = useState(false);
+
+    // Bulk State
+    const [isBulk, setIsBulk] = useState(false);
+    const [selectedUsers, setSelectedUsers] = useState([user?.id]);
+
     useEffect(() => {
         loadIntents();
-    }, []);
+    }, [user]);
 
     const loadIntents = async () => {
+        if (!user) return;
         try {
-            const r = await getUserIntents();
+            const r = await getUserIntents(user.id);
             setIntents(r.data.intents);
         } catch (e) { console.error(e); }
         finally { setLoadingIntents(false); }
@@ -52,31 +76,55 @@ export default function IntentBuilder() {
             const r = await parseIntent(text);
             setParseResult(r.data);
         } catch (e) {
-            setMessage({ type: 'error', text: 'Failed to parse intent. Check backend connection.' });
+            setMessage({ type: 'error', text: 'Failed to parse intent.' });
         } finally { setParsing(false); }
     };
 
     const handleCreate = async () => {
-        if (!parseResult?.success) return;
+        let policy;
+        let raw;
+
+        if (mode === 'nlp') {
+            if (!parseResult?.success) return;
+            policy = parseResult.parsedPolicy;
+            raw = text;
+        } else {
+            policy = {
+                amount: parseFloat(manualAmount),
+                timeLimit: parseInt(manualDays),
+                timeUnit: 'days',
+                categoryKeys: [MCC_LABELS[manualCategory]],
+                allowedMCCs: [manualCategory],
+                geoRestriction: { city: manualCity, state: null, radius: 20 },
+                enforcementTier: manualProof ? 3 : 1,
+                proofRequired: manualProof
+            };
+            raw = `Allow ₹${manualAmount} for ${MCC_LABELS[manualCategory]} in ${manualCity} for ${manualDays} days`;
+        }
+
         setCreating(true);
         try {
-            await createIntent(text, parseResult.parsedPolicy);
-            setMessage({ type: 'success', text: `Intent created! ₹${parseResult.parsedPolicy.amount} locked successfully.` });
+            if (isBulk && selectedUsers.length > 0) {
+                await bulkCreateIntents({ userIds: selectedUsers, rawText: raw, parsedPolicy: policy });
+                setMessage({ type: 'success', text: `Bulk rule deployed to ${selectedUsers.length} wallets!` });
+            } else {
+                await createIntent(raw, policy, user.id);
+                setMessage({ type: 'success', text: `Intent created! ₹${policy.amount} locked successfully.` });
+            }
             setText('');
             setParseResult(null);
             loadIntents();
         } catch (e) {
-            const errMsg = e.response?.data?.error || 'Failed to create intent';
-            setMessage({ type: 'error', text: errMsg });
+            setMessage({ type: 'error', text: e.response?.data?.error || 'Failed to create intent' });
         } finally { setCreating(false); }
     };
 
-    const handleCancel = async (intentId) => {
-        try {
-            const { cancelIntent } = await import('../api/client');
-            await cancelIntent(intentId);
-            loadIntents();
-        } catch (e) { console.error(e); }
+    const toggleUserSelection = (userId) => {
+        if (selectedUsers.includes(userId)) {
+            setSelectedUsers(selectedUsers.filter(id => id !== userId));
+        } else {
+            setSelectedUsers([...selectedUsers, userId]);
+        }
     };
 
     const policy = parseResult?.parsedPolicy;
@@ -84,157 +132,142 @@ export default function IntentBuilder() {
 
     return (
         <div>
-            <Header title="Intent Builder" subtitle="Define spending rules in natural language" />
+            <Header title="Intent Builder" subtitle="Define spending rules & deploy in bulk" />
             <div className="page-container">
 
                 <div className="grid-2" style={{ alignItems: 'start' }}>
                     {/* Left: Builder Panel */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-                        {/* NLP Input */}
+                        {/* Mode Selector */}
+                        <div className="tabs" style={{ background: 'var(--bg-secondary)', padding: 4, borderRadius: 12, display: 'inline-flex', alignSelf: 'start', marginBottom: 4 }}>
+                            <button className={`tab ${mode === 'nlp' ? 'active' : ''}`} onClick={() => setMode('nlp')} style={{ padding: '8px 16px', borderRadius: 8, fontSize: '0.85rem' }}>
+                                <Zap size={14} style={{ marginRight: 6 }} /> NLP AI
+                            </button>
+                            <button className={`tab ${mode === 'manual' ? 'active' : ''}`} onClick={() => setMode('manual')} style={{ padding: '8px 16px', borderRadius: 8, fontSize: '0.85rem' }}>
+                                <Settings2 size={14} style={{ marginRight: 6 }} /> Manual
+                            </button>
+                        </div>
+
+                        {/* Builder Card */}
                         <div className="card card-p">
-                            <div className="card-header">
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                    <div className="title-icon" style={{ background: 'rgba(139,92,246,0.12)', color: 'var(--accent-secondary)' }}>
-                                        <Zap size={14} />
+                            {mode === 'nlp' ? (
+                                <>
+                                    <div className="form-group" style={{ marginBottom: 12 }}>
+                                        <label className="form-label">Describe your spending rule</label>
+                                        <textarea
+                                            className="textarea"
+                                            value={text}
+                                            onChange={e => setText(e.target.value)}
+                                            placeholder='e.g. "Allow ₹500 for books only for 30 days in Chennai"'
+                                            rows={3}
+                                        />
                                     </div>
-                                    <div>
-                                        <h3 style={{ fontSize: '0.9rem' }}>Natural Language Intent</h3>
-                                        <p>Describe your spending rule in plain English</p>
+                                    <div style={{ marginBottom: 14 }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                                            {SAMPLE_INTENTS.map((s, i) => (
+                                                <button key={i} onClick={() => setText(s)} className="btn btn-ghost" style={{ justifyContent: 'start', textAlign: 'left', fontWeight: 400, fontSize: '0.78rem' }}>
+                                                    "{s}"
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </>
+                            ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                                    <div className="grid-2">
+                                        <div className="form-group">
+                                            <label className="form-label">Amount (₹)</label>
+                                            <input type="number" className="input" value={manualAmount} onChange={e => setManualAmount(e.target.value)} />
+                                        </div>
+                                        <div className="form-group">
+                                            <label className="form-label">Category</label>
+                                            <select className="input" value={manualCategory} onChange={e => setManualCategory(e.target.value)}>
+                                                {Object.entries(MCC_LABELS).map(([mcc, label]) => (
+                                                    <option key={mcc} value={mcc}>{label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="grid-2">
+                                        <div className="form-group">
+                                            <label className="form-label">Time Window (Days)</label>
+                                            <input type="number" className="input" value={manualDays} onChange={e => setManualDays(e.target.value)} />
+                                        </div>
+                                        <div className="form-group">
+                                            <label className="form-label">City Bound</label>
+                                            <input type="text" className="input" value={manualCity} onChange={e => setManualCity(e.target.value)} />
+                                        </div>
+                                    </div>
+                                    <div className="checkbox-group" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                        <input type="checkbox" checked={manualProof} onChange={e => setManualProof(e.target.checked)} id="proof-req" />
+                                        <label htmlFor="proof-req" className="form-label" style={{ marginBottom: 0 }}>Require Proof / Invoice (Tier 3)</label>
                                     </div>
                                 </div>
-                            </div>
+                            )}
 
-                            <div className="form-group" style={{ marginBottom: 12 }}>
-                                <textarea
-                                    className="textarea"
-                                    value={text}
-                                    onChange={e => setText(e.target.value)}
-                                    placeholder='e.g. "Allow ₹500 for books only for 30 days in Chennai"'
-                                    rows={3}
-                                    style={{ fontSize: '0.95rem' }}
-                                />
-                            </div>
+                            {/* Bulk Deployment Section */}
+                            <div style={{ marginTop: 20, paddingTop: 20, borderTop: '1px solid var(--border-subtle)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                                    <h4 style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <Users size={15} style={{ color: 'var(--accent-primary)' }} /> Bulk Deployment
+                                    </h4>
+                                    <div className="switch-container" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <span style={{ fontSize: '0.75rem', color: isBulk ? 'var(--accent-primary)' : 'var(--text-muted)' }}>{isBulk ? 'Enabled' : 'Disabled'}</span>
+                                        <input type="checkbox" checked={isBulk} onChange={e => { setIsBulk(e.target.checked); if (!e.target.checked) setSelectedUsers([user.id]); }} />
+                                    </div>
+                                </div>
 
-                            {/* Sample intents */}
-                            <div style={{ marginBottom: 14 }}>
-                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-                                    <Lightbulb size={11} /> Try these examples:
-                                </div>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                                    {SAMPLE_INTENTS.map((s, i) => (
-                                        <button key={i} onClick={() => setText(s)}
-                                            style={{ textAlign: 'left', background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderRadius: 8, padding: '7px 12px', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--text-secondary)', transition: 'var(--transition-fast)' }}
-                                            onMouseEnter={e => e.target.style.borderColor = 'rgba(59,130,246,0.3)'}
-                                            onMouseLeave={e => e.target.style.borderColor = 'var(--border-subtle)'}
-                                        >
-                                            "{s}"
-                                        </button>
-                                    ))}
-                                </div>
+                                {isBulk && (
+                                    <div className="grid-2" style={{ background: 'var(--bg-secondary)', padding: 12, borderRadius: 10 }}>
+                                        {EMPLOYEES.map(emp => (
+                                            <div key={emp.id}
+                                                onClick={() => toggleUserSelection(emp.id)}
+                                                style={{
+                                                    display: 'flex', alignItems: 'center', gap: 8, padding: 8, borderRadius: 6, cursor: 'pointer',
+                                                    background: selectedUsers.includes(emp.id) ? 'rgba(59,130,246,0.1)' : 'transparent',
+                                                    border: `1px solid ${selectedUsers.includes(emp.id) ? 'var(--accent-primary)' : 'transparent'}`
+                                                }}>
+                                                <div style={{ width: 8, height: 8, borderRadius: '50%', background: selectedUsers.includes(emp.id) ? 'var(--accent-primary)' : 'var(--border-subtle)' }} />
+                                                <span style={{ fontSize: '0.75rem' }}>{emp.name}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
 
                             {message && (
-                                <div className={`alert alert-${message.type === 'success' ? 'success' : 'error'}`} style={{ marginBottom: 12 }}>
+                                <div className={`alert alert-${message.type === 'success' ? 'success' : 'error'}`} style={{ marginTop: 16 }}>
                                     {message.type === 'success' ? <CheckCircle size={15} /> : <AlertCircle size={15} />}
                                     <span>{message.text}</span>
                                 </div>
                             )}
 
-                            <div style={{ display: 'flex', gap: 10 }}>
-                                <button className="btn btn-primary" onClick={handleParse} disabled={parsing || !text.trim()} style={{ flex: 1 }}>
-                                    {parsing ? <><div className="spinner" style={{ width: 14, height: 14 }} /> Parsing...</> : <><Zap size={14} /> Parse Intent</>}
-                                </button>
-                                {parseResult?.success && (
-                                    <button className="btn btn-success" onClick={handleCreate} disabled={creating}>
-                                        {creating ? <div className="spinner" style={{ width: 14, height: 14 }} /> : <><Plus size={14} /> Create & Lock</>}
+                            <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+                                {mode === 'nlp' && (
+                                    <button className="btn btn-secondary" onClick={handleParse} disabled={parsing || !text.trim()} style={{ flex: 1 }}>
+                                        {parsing ? <div className="spinner" /> : 'Parse Intent'}
                                     </button>
                                 )}
+                                <button className="btn btn-primary" onClick={handleCreate} disabled={creating || (mode === 'nlp' && !parseResult)} style={{ flex: 1 }}>
+                                    {creating ? <div className="spinner" /> : (isBulk ? 'Deploy Bulk Rule' : 'Create & Lock')}
+                                </button>
                             </div>
                         </div>
 
-                        {/* Parse Result Preview */}
-                        {parseResult && policy && (
-                            <div className={`card card-p animate-slide-in`} style={{ borderColor: parseResult.success ? 'rgba(59,130,246,0.25)' : 'rgba(239,68,68,0.25)' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                                    <h3 style={{ fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <CheckCircle size={16} style={{ color: 'var(--accent-green)' }} />
-                                        Policy Extracted
-                                    </h3>
-                                    <span style={{ fontSize: '0.7rem', background: 'rgba(16,185,129,0.1)', color: 'var(--accent-green)', padding: '2px 8px', borderRadius: 20 }}>
-                                        {Math.round((parseResult.confidence || 0) * 100)}% confidence
-                                    </span>
-                                </div>
-
-                                {/* Summary */}
-                                <div style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.12)', borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
-                                    <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.6, fontStyle: 'italic' }}>"{parseResult.summary}"</p>
-                                </div>
-
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                                    {/* Amount */}
-                                    <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: '12px 14px' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                                            <DollarSign size={12} style={{ color: 'var(--accent-amber)' }} />
-                                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Amount</span>
-                                        </div>
-                                        <div style={{ fontWeight: 800, fontSize: '1.2rem', color: 'var(--text-primary)' }}>₹{policy.amount.toLocaleString('en-IN')}</div>
+                        {/* Parse Result Preview (NLP Mode Only) */}
+                        {mode === 'nlp' && parseResult && policy && (
+                            <div className="card card-p animate-slide-in">
+                                <h3 style={{ fontSize: '0.9rem', marginBottom: 12 }}>Extracted Policy</h3>
+                                <div className="grid-2">
+                                    <div style={{ background: 'var(--bg-secondary)', padding: 12, borderRadius: 10 }}>
+                                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>AMOUNT</div>
+                                        <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>₹{policy.amount}</div>
                                     </div>
-
-                                    {/* Time */}
-                                    <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: '12px 14px' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                                            <Clock size={12} style={{ color: 'var(--accent-primary)' }} />
-                                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Time Limit</span>
-                                        </div>
-                                        <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{policy.timeLimit} {policy.timeUnit}</div>
+                                    <div style={{ background: 'var(--bg-secondary)', padding: 12, borderRadius: 10 }}>
+                                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>CATEGORY</div>
+                                        <div style={{ fontSize: '0.85rem', fontWeight: 600 }}>{policy.categoryKeys?.[0] || 'Any'}</div>
                                     </div>
-
-                                    {/* Categories */}
-                                    <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: '12px 14px', gridColumn: '1/-1' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                                            <Tag size={12} style={{ color: 'var(--accent-secondary)' }} />
-                                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Allowed Categories & MCCs</span>
-                                        </div>
-                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                            {policy.categoryKeys?.map(c => (
-                                                <span key={c} className="badge badge-active">{c}</span>
-                                            ))}
-                                        </div>
-                                        <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                            {policy.allowedMCCs?.map(mcc => (
-                                                <span key={mcc} style={{ fontSize: '0.68rem', background: 'var(--bg-elevated)', color: 'var(--text-muted)', padding: '2px 8px', borderRadius: 6, fontFamily: 'monospace' }}>
-                                                    MCC {mcc} · {MCC_LABELS[mcc] || 'Other'}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    {/* Geo */}
-                                    {policy.geoRestriction && (
-                                        <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: '12px 14px' }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                                                <MapPin size={12} style={{ color: 'var(--accent-green)' }} />
-                                                <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Location</span>
-                                            </div>
-                                            <div style={{ fontWeight: 600, color: 'var(--text-primary)', textTransform: 'capitalize' }}>
-                                                {policy.geoRestriction.city || policy.geoRestriction.state || 'Any'}
-                                            </div>
-                                        </div>
-                                    )}
-
-                                    {/* Tier */}
-                                    <div style={{ background: 'var(--bg-secondary)', borderRadius: 10, padding: '12px 14px' }}>
-                                        <div style={{ marginBottom: 6, fontSize: '0.68rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Enforcement</div>
-                                        <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.8rem' }}>{tierLabel[policy.enforcementTier]}</div>
-                                    </div>
-                                </div>
-
-                                {/* Flags */}
-                                <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                    {policy.escrowEnabled && <span className="badge badge-locked">🔒 Escrow Mode</span>}
-                                    {policy.proofRequired && <span className="badge badge-tier3">📄 Proof Required</span>}
-                                    {policy.splitRules && <span className="badge badge-active">📊 Split: {Math.round(policy.splitRules.spending * 100)}%/{Math.round(policy.splitRules.savings * 100)}%</span>}
                                 </div>
                             </div>
                         )}
@@ -244,82 +277,21 @@ export default function IntentBuilder() {
                     <div>
                         <div className="card card-p">
                             <div className="card-header">
-                                <div>
-                                    <h3 style={{ fontSize: '0.9rem' }}>Active Intent Rules</h3>
-                                    <p>Your programmable spending policies</p>
-                                </div>
+                                <h3 style={{ fontSize: '0.9rem' }}>Active Rules</h3>
                                 <span className="badge badge-active">{intents.filter(i => i.status === 'active').length} Active</span>
                             </div>
 
-                            {loadingIntents ? (
-                                <div className="loading-overlay"><div className="spinner" /></div>
-                            ) : intents.length === 0 ? (
-                                <div className="empty-state">
-                                    <div className="empty-icon">⚡</div>
-                                    <h4>No intents yet</h4>
-                                    <p>Create your first programmable spending rule</p>
-                                </div>
-                            ) : (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                                    {intents.map(intent => {
-                                        const pct = intent.amountLocked > 0 ? (intent.amountUsed / intent.amountLocked * 100) : 0;
-                                        const daysLeft = Math.max(0, Math.ceil((new Date(intent.expiresAt) - new Date()) / (1000 * 60 * 60 * 24)));
-                                        return (
-                                            <div key={intent.id} className="card" style={{ padding: '16px', borderColor: intent.status === 'active' ? 'rgba(59,130,246,0.15)' : 'var(--border-subtle)' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-                                                    <div style={{ flex: 1, minWidth: 0 }}>
-                                                        <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                            "{intent.rawText.substring(0, 55)}{intent.rawText.length > 55 ? '...' : ''}"
-                                                        </div>
-                                                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                                            <span className={`badge badge-${intent.status}`}>{intent.status}</span>
-                                                            <span className={`badge badge-tier${intent.enforcementTier}`}>Tier {intent.enforcementTier}</span>
-                                                            {intent.parsedPolicy.escrowEnabled && <span className="badge badge-locked">Escrow</span>}
-                                                        </div>
-                                                    </div>
-                                                    {intent.status === 'active' && (
-                                                        <button className="btn btn-ghost btn-sm" onClick={() => handleCancel(intent.id)}
-                                                            style={{ padding: '4px', marginLeft: 8, color: 'var(--accent-red)' }}
-                                                            title="Cancel intent">
-                                                            <Trash2 size={13} />
-                                                        </button>
-                                                    )}
-                                                </div>
-
-                                                {/* Amount Progress */}
-                                                <div style={{ marginBottom: 8 }}>
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: 5 }}>
-                                                        <span>₹{intent.amountUsed.toLocaleString('en-IN')} used</span>
-                                                        <span>₹{intent.amountLocked.toLocaleString('en-IN')} total</span>
-                                                    </div>
-                                                    <div className="progress-bar-outer">
-                                                        <div className="progress-bar-inner" style={{ width: `${pct}%`, background: pct > 80 ? 'var(--accent-red)' : pct > 50 ? 'var(--accent-amber)' : 'var(--gradient-brand)' }} />
-                                                    </div>
-                                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', marginTop: 4 }}>
-                                                        <span style={{ color: 'var(--accent-green)' }}>₹{intent.amountRemaining.toLocaleString('en-IN')} remaining</span>
-                                                        <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text-muted)' }}>
-                                                            <Clock size={10} /> {daysLeft}d left
-                                                        </span>
-                                                    </div>
-                                                </div>
-
-                                                {/* NFT Token */}
-                                                <div style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.12)', borderRadius: 8, padding: '8px 10px', display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                    <span style={{ fontSize: '14px' }}>🪙</span>
-                                                    <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{intent.nftTokenId}</span>
-                                                </div>
-
-                                                {/* Violation count */}
-                                                {intent.violationCount > 0 && (
-                                                    <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', color: 'var(--accent-red)' }}>
-                                                        <AlertCircle size={11} /> {intent.violationCount} violation attempt{intent.violationCount > 1 ? 's' : ''} blocked
-                                                    </div>
-                                                )}
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                                {intents.map(intent => (
+                                    <div key={intent.id} className="card card-p" style={{ padding: 12 }}>
+                                        <div style={{ fontSize: '0.78rem', marginBottom: 6 }}>"{intent.rawText}"</div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <span className={`badge badge-tier${intent.enforcementTier}`}>Tier {intent.enforcementTier}</span>
+                                            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>₹{intent.amountRemaining} left</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </div>
                 </div>

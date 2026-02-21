@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import Header from '../components/Header';
 import { getReputation } from '../api/client';
+import { useUser } from '../context/UserContext';
 import { Shield, Star, TrendingUp, Award, Zap, CheckCircle, XCircle } from 'lucide-react';
 
 const ScoreArc = ({ score }) => {
@@ -46,12 +47,15 @@ export default function Reputation() {
     const [rep, setRep] = useState(null);
     const [loading, setLoading] = useState(true);
 
+    const { user } = useUser();
+
     useEffect(() => {
-        getReputation()
+        if (!user) return;
+        getReputation(user.id)
             .then(r => setRep(r.data.reputation))
             .catch(console.error)
             .finally(() => setLoading(false));
-    }, []);
+    }, [user]);
 
     if (loading) return (
         <div>

@@ -156,4 +156,26 @@ const createEscrow = (userId, intentId, title, milestones) => {
     return newEscrow;
 };
 
-module.exports = { escrowStore, getEscrowsByUser, getEscrowById, releaseMilestone, initiateClawback, createEscrow };
+const modifyEscrow = (id, payload) => {
+    const escrow = escrowStore.find(e => e.id === id);
+    if (!escrow) return { success: false, error: 'Escrow not found' };
+
+    if (payload.title) escrow.title = payload.title;
+    if (payload.milestones) {
+        // Simple modification: replace existing pending milestones or add new ones
+        // In a real system, this would be highly restricted
+        escrow.milestones = payload.milestones.map((m, i) => ({
+            id: m.id || `MST-M-${Date.now()}-${i}`,
+            ...m,
+            status: m.status || 'pending',
+            proofProvided: m.proofProvided || false
+        }));
+        escrow.totalAmount = escrow.milestones.reduce((sum, m) => sum + m.amount, 0);
+        escrow.pendingAmount = escrow.totalAmount - escrow.releasedAmount;
+    }
+
+    return { success: true, escrow };
+};
+
+module.exports = { escrowStore, getEscrowsByUser, getEscrowById, releaseMilestone, initiateClawback, createEscrow, modifyEscrow };
+

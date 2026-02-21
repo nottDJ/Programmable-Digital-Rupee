@@ -8,10 +8,11 @@
 
 const express = require('express');
 const router = express.Router();
-const { getEscrowsByUser, getEscrowById, releaseMilestone, initiateClawback, createEscrow } = require('../services/escrowService');
+const { getEscrowsByUser, getEscrowById, releaseMilestone, initiateClawback, createEscrow, modifyEscrow } = require('../services/escrowService');
 const { recordReputationEvent } = require('../services/reputationEngine');
 
 router.get('/user/:userId', (req, res) => {
+
     const escrows = getEscrowsByUser(req.params.userId);
     return res.json({ success: true, escrows });
 });
@@ -71,4 +72,14 @@ router.post('/:id/clawback', (req, res) => {
     }
 });
 
+router.post('/:id/modify', (req, res) => {
+    try {
+        const result = modifyEscrow(req.params.id, req.body);
+        return res.json(result);
+    } catch (err) {
+        return res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 module.exports = router;
+
